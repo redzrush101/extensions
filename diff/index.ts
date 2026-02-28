@@ -1,5 +1,21 @@
 /**
- * Split Diff Renderer Extension
+ * Split Diff Renderer Extension for Pi Coding Agent
+ * 
+ * Originally from: https://github.com/nielpattin/dotfiles
+ * Enhanced and modified by redzrush101.
+ * 
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  * Provides a beautiful side-by-side diff view for the edit tool with:
  * - Syntax highlighting for the edited language
@@ -7,9 +23,6 @@
  * - Word-level diff detection for better readability
  * - Configurable row limits and display options
  * - File path and change statistics in the header
- *
- * Originally from: https://github.com/nielpattin/dotfiles
- * Enhanced with additional features and improvements.
  *
  * Usage:
  *   pi -e ./diff

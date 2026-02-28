@@ -21,5 +21,9 @@ Edit `index.ts` to customize `CONFIG`:
 - `showFilePath`: Toggle file path header (default: true)
 
 ## Credits
-Based on [nielpattin/dotfiles](https://github.com/nielpattin/dotfiles).
-Enhanced by Pi Coding Agent.
+Originally based on [nielpattin/dotfiles](https://github.com/nielpattin/dotfiles).
+Enhanced by Pi Coding Agent and redzrush101.
+
+## License
+GPLv3. See [LICENSE](../../LICENSE) for more details.
+
