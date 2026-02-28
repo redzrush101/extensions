@@ -12,7 +12,7 @@
  * Enhanced with additional features and improvements.
  *
  * Usage:
- *   pi -e ./split-diff-renderer
+ *   pi -e ./diff
  *
  * Configuration (via pi settings):
  *   splitDiff.maxRows: number - Max rows to show (default: 200)
