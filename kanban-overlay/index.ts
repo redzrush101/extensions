@@ -17,7 +17,20 @@ interface UpdateTasksDetails {
 	error?: string;
 }
 
+interface UpdateTasksInput {
+	mode?: KanbanMode;
+	todo?: string[];
+	in_progress?: string[];
+	done?: string[];
+}
+
 const EMPTY_BOARD: KanbanBoard = { todo: [], inProgress: [], done: [] };
+
+const KANBAN_SYSTEM_PROMPT_BLOCK =
+	"## Kanban Task Tracking\n" +
+	"If work spans multiple steps, maintain a live board with the `update_tasks` tool. " +
+	"Keep tasks short and actionable. Move items across todo -> in_progress -> done as you progress. " +
+	"Use mode=append for incremental additions, mode=replace for full column updates, mode=clear when the task is fully complete.";
 
 const UpdateTasksParams = Type.Object({
 	mode: Type.Optional(
@@ -56,6 +69,18 @@ function normalize(board: KanbanBoard): KanbanBoard {
 	const todo = sanitize(board.todo).filter((item) => !doneSet.has(item) && !inProgressSet.has(item));
 
 	return { todo, inProgress, done };
+}
+
+function cloneBoard(board: KanbanBoard): KanbanBoard {
+	return {
+		todo: [...board.todo],
+		inProgress: [...board.inProgress],
+		done: [...board.done],
+	};
+}
+
+function formatBoardLines(board: KanbanBoard): string {
+	return `TODO (${board.todo.length}): ${board.todo.join("; ") || "-"}\nIN PROGRESS (${board.inProgress.length}): ${board.inProgress.join("; ") || "-"}\nDONE (${board.done.length}): ${board.done.join("; ") || "-"}`;
 }
 
 function compactList(items: string[], max: number): string {
@@ -98,7 +123,7 @@ function reconstructFromSession(ctx: ExtensionContext): KanbanBoard {
 	return normalize(board);
 }
 
-function updateBoard(current: KanbanBoard, params: any): { board: KanbanBoard; mode: KanbanMode; error?: string } {
+function updateBoard(current: KanbanBoard, params: UpdateTasksInput): { board: KanbanBoard; mode: KanbanMode; error?: string } {
 	const mode: KanbanMode = params.mode ?? "replace";
 
 	if (mode === "list") {
@@ -229,10 +254,9 @@ export default function kanbanOverlayExtension(pi: ExtensionAPI): void {
 		updateWorkingMessage(ctx, board, isRunning, activity);
 	};
 
-	pi.on("session_start", (_event, ctx) => rebuild(ctx));
-	pi.on("session_switch", (_event, ctx) => rebuild(ctx));
-	pi.on("session_fork", (_event, ctx) => rebuild(ctx));
-	pi.on("session_tree", (_event, ctx) => rebuild(ctx));
+	for (const eventName of ["session_start", "session_switch", "session_fork", "session_tree"] as const) {
+		pi.on(eventName, (_event, ctx) => rebuild(ctx));
+	}
 
 	pi.on("agent_start", (_event, ctx) => {
 		isRunning = true;
@@ -261,11 +285,7 @@ export default function kanbanOverlayExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", (event) => ({
-		systemPrompt:
-			`${event.systemPrompt}\n\n## Kanban Task Tracking\n` +
-			"If work spans multiple steps, maintain a live board with the `update_tasks` tool. " +
-			"Keep tasks short and actionable. Move items across todo -> in_progress -> done as you progress. " +
-			"Use mode=append for incremental additions, mode=replace for full column updates, mode=clear when the task is fully complete.",
+		systemPrompt: `${event.systemPrompt}\n\n${KANBAN_SYSTEM_PROMPT_BLOCK}`,
 	}));
 
 	pi.registerTool({
@@ -275,7 +295,7 @@ export default function kanbanOverlayExtension(pi: ExtensionAPI): void {
 			"Maintain a kanban board visible in UI. Use mode=replace with todo/in_progress/done arrays to set columns; mode=append to add tasks; mode=clear to reset; mode=list to read current board.",
 		parameters: UpdateTasksParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const next = updateBoard(board, params);
+			const next = updateBoard(board, params as UpdateTasksInput);
 			board = next.board;
 			activity = "updated tasks";
 			updateWorkingMessage(ctx, board, isRunning, activity);
@@ -288,15 +308,10 @@ export default function kanbanOverlayExtension(pi: ExtensionAPI): void {
 						: `Kanban board updated (${next.mode}).`;
 
 			return {
-				content: [
-					{
-						type: "text",
-						text: `${text}\n\nTODO (${board.todo.length}): ${board.todo.join("; ") || "-"}\nIN PROGRESS (${board.inProgress.length}): ${board.inProgress.join("; ") || "-"}\nDONE (${board.done.length}): ${board.done.join("; ") || "-"}`,
-					},
-				],
+				content: [{ type: "text", text: `${text}\n\n${formatBoardLines(board)}` }],
 				details: {
 					mode: next.mode,
-					board,
+					board: cloneBoard(board),
 					error: next.error,
 				} as UpdateTasksDetails,
 			};

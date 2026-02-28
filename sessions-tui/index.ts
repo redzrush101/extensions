@@ -1,10 +1,5 @@
 import { SessionManager, SessionSelectorComponent, type ExtensionAPI, type ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 
-type SessionPickResult = {
-	selectedPath?: string;
-	cancelled: boolean;
-};
-
 function notify(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info"): void {
 	if (ctx.hasUI) {
 		ctx.ui.notify(message, type);
@@ -14,9 +9,9 @@ function notify(ctx: ExtensionCommandContext, message: string, type: "info" | "w
 	console.warn(`[sessions] ${message}`);
 }
 
-async function pickSession(ctx: ExtensionCommandContext): Promise<SessionPickResult> {
-	const selectedPath = await ctx.ui.custom<string | undefined>((tui, _theme, keybindings, done) => {
-		const selector = new SessionSelectorComponent(
+async function pickSession(ctx: ExtensionCommandContext): Promise<string | undefined> {
+	return ctx.ui.custom<string | undefined>((tui, _theme, keybindings, done) => {
+		return new SessionSelectorComponent(
 			(onProgress) => SessionManager.list(ctx.sessionManager.getCwd(), ctx.sessionManager.getSessionDir(), onProgress),
 			SessionManager.listAll,
 			(sessionPath) => done(sessionPath),
@@ -29,18 +24,7 @@ async function pickSession(ctx: ExtensionCommandContext): Promise<SessionPickRes
 			},
 			ctx.sessionManager.getSessionFile(),
 		);
-
-		return selector;
 	});
-
-	if (!selectedPath) {
-		return { cancelled: true };
-	}
-
-	return {
-		selectedPath,
-		cancelled: false,
-	};
 }
 
 async function handleSessionsCommand(ctx: ExtensionCommandContext): Promise<void> {
@@ -50,19 +34,19 @@ async function handleSessionsCommand(ctx: ExtensionCommandContext): Promise<void
 	}
 
 	const currentSessionPath = ctx.sessionManager.getSessionFile();
-	const result = await pickSession(ctx);
+	const selectedPath = await pickSession(ctx);
 
-	if (result.cancelled || !result.selectedPath) {
+	if (!selectedPath) {
 		notify(ctx, "Session switch cancelled.");
 		return;
 	}
 
-	if (currentSessionPath && result.selectedPath === currentSessionPath) {
+	if (currentSessionPath && selectedPath === currentSessionPath) {
 		notify(ctx, "Already in this session.");
 		return;
 	}
 
-	const switched = await ctx.switchSession(result.selectedPath);
+	const switched = await ctx.switchSession(selectedPath);
 	if (switched.cancelled) {
 		notify(ctx, "Session switch cancelled.");
 		return;
@@ -72,12 +56,10 @@ async function handleSessionsCommand(ctx: ExtensionCommandContext): Promise<void
 }
 
 export default function sessionsExtension(pi: ExtensionAPI): void {
-	const command = {
+	pi.registerCommand("sessions", {
 		description: "Open session picker and switch sessions",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			await handleSessionsCommand(ctx);
 		},
-	};
-
-	pi.registerCommand("sessions", command);
+	});
 }

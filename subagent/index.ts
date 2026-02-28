@@ -277,23 +277,6 @@ function getSubagentHistory(
 	return results;
 }
 
-function formatHistoryEntry(entry: SubagentHistoryEntry, themeFg: (color: any, text: string) => string): string {
-	const date = new Date(entry.timestamp);
-	const timeStr = date.toLocaleString();
-	const statusIcon = entry.status === "completed" ? "✓" : entry.status === "aborted" ? "○" : "✗";
-	const statusColor = entry.status === "completed" ? "success" : entry.status === "aborted" ? "muted" : "error";
-
-	let line = themeFg(statusColor, statusIcon) + " ";
-	line += themeFg("accent", entry.agent) + " ";
-	line += themeFg("dim", `[${entry.id}]`) + " ";
-	line += themeFg("muted", timeStr);
-
-	const taskPreview = entry.task.length > 50 ? entry.task.slice(0, 50) + "..." : entry.task;
-	line += "\n    " + themeFg("dim", taskPreview);
-
-	return line;
-}
-
 interface SingleResult {
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
@@ -315,6 +298,47 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+}
+
+const EMPTY_USAGE: UsageStats = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	cost: 0,
+	contextTokens: 0,
+	turns: 0,
+};
+
+function createUsageStats(usage?: UsageStats): UsageStats {
+	if (!usage) return { ...EMPTY_USAGE };
+	return {
+		input: usage.input ?? 0,
+		output: usage.output ?? 0,
+		cacheRead: usage.cacheRead ?? 0,
+		cacheWrite: usage.cacheWrite ?? 0,
+		cost: usage.cost ?? 0,
+		contextTokens: usage.contextTokens ?? 0,
+		turns: usage.turns ?? 0,
+	};
+}
+
+function toHistorySingleResult(entry: SubagentHistoryEntry): SingleResult {
+	return {
+		agent: entry.agent,
+		agentSource: "unknown",
+		task: entry.task,
+		exitCode: entry.exitCode,
+		messages: [],
+		stderr: "",
+		usage: createUsageStats(entry.usage),
+		sessionId: entry.sessionId,
+		resumedFrom: entry.id,
+	};
+}
+
+function isFailedResult(result: Pick<SingleResult, "exitCode" | "stopReason">): boolean {
+	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -432,7 +456,7 @@ async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleRes
 			exitCode: 1,
 			messages: [],
 			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			usage: createUsageStats(),
 			step,
 		};
 	}
@@ -458,7 +482,7 @@ async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleRes
 		exitCode: 0,
 		messages: [],
 		stderr: "",
-		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+		usage: createUsageStats(),
 		model: agent.model,
 		step,
 		resumedFrom: resumeSessionId,
@@ -574,7 +598,7 @@ async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleRes
 
 		if (pi && currentResult.sessionId) {
 			const status: "completed" | "failed" | "aborted" =
-				wasAborted ? "aborted" : exitCode !== 0 || currentResult.stopReason === "error" ? "failed" : "completed";
+				wasAborted ? "aborted" : isFailedResult(currentResult) ? "failed" : "completed";
 
 			pi.appendEntry<SubagentHistoryEntry>(SUBAGENT_CUSTOM_TYPE, {
 				id: randomUUID(),
@@ -697,6 +721,7 @@ export default function (pi: ExtensionAPI) {
 					projectAgentsDir: discovery.projectAgentsDir,
 					results,
 				});
+			const emptyDetails = (mode: "single" | "parallel" | "chain" = "single") => makeDetails(mode)([]);
 
 			let resumeSessionId: string | undefined;
 
@@ -710,7 +735,7 @@ export default function (pi: ExtensionAPI) {
 				if (history.length === 0) {
 					return {
 						content: [{ type: "text", text: "No previous subagent runs found." }],
-						details: makeDetails("single")([]),
+						details: emptyDetails(),
 					};
 				}
 
@@ -724,7 +749,7 @@ export default function (pi: ExtensionAPI) {
 
 				return {
 					content: [{ type: "text", text: `Subagent History (${history.length} entries):\n\n${lines.join("\n\n")}` }],
-					details: makeDetails("single")([]),
+					details: emptyDetails(),
 				};
 			}
 
@@ -734,7 +759,7 @@ export default function (pi: ExtensionAPI) {
 				if (history.length === 0) {
 					return {
 						content: [{ type: "text", text: "No previous subagent runs found to resume." }],
-						details: makeDetails("single")([]),
+						details: emptyDetails(),
 					};
 				}
 
@@ -749,7 +774,7 @@ export default function (pi: ExtensionAPI) {
 					if (!selected) {
 						return {
 							content: [{ type: "text", text: "Resume canceled." }],
-							details: makeDetails("single")([]),
+							details: emptyDetails(),
 						};
 					}
 
@@ -764,27 +789,7 @@ export default function (pi: ExtensionAPI) {
 									text: `Selected: ${selectedEntry.agent} [${selectedEntry.id}]\nTask: ${selectedEntry.task}\nStatus: ${selectedEntry.status}\nTimestamp: ${selectedEntry.timestamp}`,
 								},
 							],
-							details: makeDetails("single")([
-								{
-									agent: selectedEntry.agent,
-									agentSource: "unknown" as const,
-									task: selectedEntry.task,
-									exitCode: selectedEntry.exitCode,
-									messages: [],
-									stderr: "",
-									usage: selectedEntry.usage ?? {
-										input: 0,
-										output: 0,
-										cacheRead: 0,
-										cacheWrite: 0,
-										cost: 0,
-										contextTokens: 0,
-										turns: 0,
-									},
-									sessionId: selectedEntry.sessionId,
-									resumedFrom: selectedEntry.id,
-								},
-							]),
+							details: makeDetails("single")([toHistorySingleResult(selectedEntry)]),
 						};
 					}
 
@@ -803,7 +808,7 @@ export default function (pi: ExtensionAPI) {
 								text: `No UI available for selection. Use resume with a specific session ID:\n\n${lines.join("\n")}`,
 							},
 						],
-						details: makeDetails("single")([]),
+						details: emptyDetails(),
 					};
 				}
 			}
@@ -816,7 +821,7 @@ export default function (pi: ExtensionAPI) {
 				if (!entry) {
 					return {
 						content: [{ type: "text", text: `Session not found: ${sessionId}` }],
-						details: makeDetails("single")([]),
+						details: emptyDetails(),
 						isError: true,
 					};
 				}
@@ -830,27 +835,7 @@ export default function (pi: ExtensionAPI) {
 								text: `Resumed session: ${entry.agent} [${entry.id}]\nTask: ${entry.task}\nStatus: ${entry.status}\nTimestamp: ${entry.timestamp}`,
 							},
 						],
-						details: makeDetails("single")([
-							{
-								agent: entry.agent,
-								agentSource: "unknown" as const,
-								task: entry.task,
-								exitCode: entry.exitCode,
-								messages: [],
-								stderr: "",
-								usage: entry.usage ?? {
-									input: 0,
-									output: 0,
-									cacheRead: 0,
-									cacheWrite: 0,
-									cost: 0,
-									contextTokens: 0,
-									turns: 0,
-								},
-								sessionId: entry.sessionId,
-								resumedFrom: entry.id,
-							},
-						]),
+						details: makeDetails("single")([toHistorySingleResult(entry)]),
 					};
 				}
 
@@ -867,7 +852,7 @@ export default function (pi: ExtensionAPI) {
 							text: `Invalid parameters. Provide exactly one mode.\nAvailable agents: ${available}`,
 						},
 					],
-					details: makeDetails("single")([]),
+					details: emptyDetails(),
 				};
 			}
 
@@ -919,24 +904,23 @@ export default function (pi: ExtensionAPI) {
 							}
 						: undefined;
 
-				const result = await runSingleAgent({
-					defaultCwd: ctx.cwd,
-					agents,
-					agentName: step.agent,
-					task: taskWithContext,
-					cwd: step.cwd,
-					step: i + 1,
-					signal,
-					onUpdate: chainUpdate,
-					makeDetails: makeDetails("chain"),
-					pi,
-					resumeSessionId,
-					parentTaskBoard,
-				});
+					const result = await runSingleAgent({
+						defaultCwd: ctx.cwd,
+						agents,
+						agentName: step.agent,
+						task: taskWithContext,
+						cwd: step.cwd,
+						step: i + 1,
+						signal,
+						onUpdate: chainUpdate,
+						makeDetails: makeDetails("chain"),
+						pi,
+						resumeSessionId,
+						parentTaskBoard,
+					});
 					results.push(result);
 
-					const isError =
-						result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+					const isError = isFailedResult(result);
 					if (isError) {
 						const errorMsg =
 							result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
@@ -963,7 +947,7 @@ export default function (pi: ExtensionAPI) {
 								text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
 							},
 						],
-						details: makeDetails("parallel")([]),
+						details: emptyDetails("parallel"),
 					};
 
 				// Track all results for streaming updates
@@ -978,7 +962,7 @@ export default function (pi: ExtensionAPI) {
 						exitCode: -1, // -1 = still running
 						messages: [],
 						stderr: "",
-						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+						usage: createUsageStats(),
 					};
 				}
 
@@ -1050,7 +1034,7 @@ export default function (pi: ExtensionAPI) {
 					resumeSessionId,
 					parentTaskBoard,
 				});
-				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+				const isError = isFailedResult(result);
 				if (isError) {
 					const errorMsg =
 						result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
@@ -1069,7 +1053,7 @@ export default function (pi: ExtensionAPI) {
 			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
 			return {
 				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
-				details: makeDetails("single")([]),
+				details: emptyDetails(),
 			};
 		},
 
@@ -1144,7 +1128,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+				const isError = isFailedResult(r);
 				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);

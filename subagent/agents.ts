@@ -26,6 +26,23 @@ export interface AgentDiscoveryResult {
 	projectAgentsDir: string | null;
 }
 
+function parseCsvList(value?: string): string[] | undefined {
+	if (!value) return undefined;
+	const items = value
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean);
+	return items.length > 0 ? items : undefined;
+}
+
+function parseTaskAccess(value?: string): TaskAccess {
+	const normalized = (value ?? "read").trim().toLowerCase();
+	if (normalized === "none" || normalized === "read" || normalized === "write") {
+		return normalized;
+	}
+	return "read";
+}
+
 function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
@@ -58,21 +75,13 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			continue;
 		}
 
-		const tools = frontmatter.tools
-			?.split(",")
-			.map((t: string) => t.trim())
-			.filter(Boolean);
-
-		const rawTaskAccess = (frontmatter.task_access ?? "read").trim().toLowerCase();
-		const taskAccess: TaskAccess =
-			rawTaskAccess === "none" || rawTaskAccess === "read" || rawTaskAccess === "write"
-				? rawTaskAccess
-				: "read";
+		const tools = parseCsvList(frontmatter.tools);
+		const taskAccess = parseTaskAccess(frontmatter.task_access);
 
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
-			tools: tools && tools.length > 0 ? tools : undefined,
+			tools,
 			model: frontmatter.model,
 			taskAccess,
 			systemPrompt: body,
@@ -108,21 +117,19 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
-	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
-	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
+	const shouldLoadUser = scope !== "project";
+	const shouldLoadProject = scope !== "user" && Boolean(projectAgentsDir);
 
-	const agentMap = new Map<string, AgentConfig>();
+	const userAgents = shouldLoadUser ? loadAgentsFromDir(userDir, "user") : [];
+	const projectAgents = shouldLoadProject && projectAgentsDir ? loadAgentsFromDir(projectAgentsDir, "project") : [];
 
-	if (scope === "both") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
-	} else if (scope === "user") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-	} else {
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
-	}
+	// For scope="both", project agents intentionally override user agents with the same name.
+	const merged = new Map<string, AgentConfig>();
+	for (const agent of userAgents) merged.set(agent.name, agent);
+	for (const agent of projectAgents) merged.set(agent.name, agent);
 
-	return { agents: Array.from(agentMap.values()), projectAgentsDir };
+	const agents = Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name));
+	return { agents, projectAgentsDir };
 }
 
 export function formatAgentList(agents: AgentConfig[], maxItems: number): { text: string; remaining: number } {

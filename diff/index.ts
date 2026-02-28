@@ -783,12 +783,10 @@ function computeChangeStats(rows: SplitDiffRow[]): {
 	addedLines: number;
 	removedLines: number;
 	changedLines: number;
-	contextLines: number;
 } {
 	let addedLines = 0;
 	let removedLines = 0;
 	let changedLines = 0;
-	let contextLines = 0;
 
 	for (const row of rows) {
 		switch (row.kind) {
@@ -801,24 +799,10 @@ function computeChangeStats(rows: SplitDiffRow[]): {
 			case "changed":
 				changedLines++;
 				break;
-			case "context":
-				contextLines++;
-				break;
 		}
 	}
 
-	return { addedLines, removedLines, changedLines, contextLines };
-}
-
-/**
- * Format bytes to human readable string
- */
-function formatBytes(bytes: number): string {
-	if (bytes === 0) return "0 B";
-	const k = 1024;
-	const sizes = ["B", "KB", "MB", "GB"];
-	const i = Math.floor(Math.log(bytes) / Math.log(k));
-	return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+	return { addedLines, removedLines, changedLines };
 }
 
 export default function diffRendererExtension(pi: ExtensionAPI) {
@@ -839,7 +823,7 @@ export default function diffRendererExtension(pi: ExtensionAPI) {
 			return new Text(`${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", pathDisplay)}`, 0, 0);
 		},
 
-		renderResult(result, { expanded, isPartial }, theme) {
+		renderResult(result, { isPartial }, theme) {
 			if (isPartial) {
 				return new Text(`${theme.fg("dim", "↳")} ${theme.fg("muted", "Applying edit...")}`, 0, 0);
 			}
