@@ -198,15 +198,8 @@ function getParentTaskBoard(ctx: ExtensionContext): KanbanBoardSnapshot | null {
 	return board;
 }
 
-function buildTaskAccessPrompt(taskAccess: TaskAccess, board: KanbanBoardSnapshot | null): string {
-	if (taskAccess === "none") {
-		return [
-			"## Parent Task Board Access",
-			"Access level: none",
-			"Do not request, read, or reference the parent task board.",
-			"Do not call `update_tasks`.",
-		].join("\n");
-	}
+function buildTaskBoardContext(taskAccess: TaskAccess, board: KanbanBoardSnapshot | null): string {
+	if (taskAccess === "none") return "";
 
 	const boardLines = board
 		? [
@@ -216,23 +209,7 @@ function buildTaskAccessPrompt(taskAccess: TaskAccess, board: KanbanBoardSnapsho
 			]
 		: ["No parent task board state found."];
 
-	if (taskAccess === "read") {
-		return [
-			"## Parent Task Board Access",
-			"Access level: read",
-			"You may read this board snapshot for coordination.",
-			"You must NOT call `update_tasks`; parent/orchestrator manages task updates.",
-			...boardLines,
-		].join("\n");
-	}
-
-	return [
-		"## Parent Task Board Access",
-		"Access level: write",
-		"You may read and update the task board when it improves coordination.",
-		"Prefer minimal updates and only touch tasks relevant to your delegated work.",
-		...boardLines,
-	].join("\n");
+	return [`Parent task board snapshot (${taskAccess}):`, ...boardLines].join("\n");
 }
 
 interface UsageStats {
@@ -395,6 +372,28 @@ function writePromptToTempFile(agentName: string, prompt: string): { dir: string
 	return { dir: tmpDir, filePath };
 }
 
+function writeTaskPermissionGuardExtension(tmpDir: string, taskAccess: TaskAccess): string {
+	const filePath = path.join(tmpDir, "task-permission-guard.ts");
+	const escaped = JSON.stringify(taskAccess);
+	const source = `import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+	const taskAccess = ${escaped} as "none" | "read" | "write";
+	pi.on("tool_call", (event) => {
+		if (event.toolName !== "update_tasks") return;
+		if (taskAccess !== "write") {
+			return {
+				block: true,
+				reason: \`update_tasks is blocked for this subagent (task_access=\${taskAccess})\`,
+			};
+		}
+	});
+}
+`;
+	fs.writeFileSync(filePath, source, { encoding: "utf-8", mode: 0o600 });
+	return filePath;
+}
+
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 interface RunSingleAgentOptions {
@@ -450,6 +449,7 @@ async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleRes
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
+	let tmpGuardPath: string | null = null;
 
 	const currentResult: SingleResult = {
 		agent: agentName,
@@ -474,16 +474,22 @@ async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleRes
 	};
 
 	try {
-		const taskAccessPrompt = buildTaskAccessPrompt(agent.taskAccess, parentTaskBoard ?? null);
-		const combinedPrompt = [agent.systemPrompt.trim(), taskAccessPrompt.trim()].filter(Boolean).join("\n\n");
-		if (combinedPrompt) {
-			const tmp = writePromptToTempFile(agent.name, combinedPrompt);
+		const boardContext = buildTaskBoardContext(agent.taskAccess, parentTaskBoard ?? null);
+		const taskInput = boardContext ? `${task}\n\n${boardContext}` : task;
+
+		if (agent.systemPrompt.trim()) {
+			const tmp = writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
 			args.push("--append-system-prompt", tmpPromptPath);
 		}
 
-		args.push(`Task: ${task}`);
+		const guardDir = tmpPromptDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+		if (!tmpPromptDir) tmpPromptDir = guardDir;
+		tmpGuardPath = writeTaskPermissionGuardExtension(guardDir, agent.taskAccess);
+		args.push("-e", tmpGuardPath);
+
+		args.push(`Task: ${taskInput}`);
 		let wasAborted = false;
 
 		const exitCode = await new Promise<number>((resolve) => {
@@ -590,6 +596,12 @@ async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleRes
 		if (tmpPromptPath)
 			try {
 				fs.unlinkSync(tmpPromptPath);
+			} catch {
+				/* ignore */
+			}
+		if (tmpGuardPath)
+			try {
+				fs.unlinkSync(tmpGuardPath);
 			} catch {
 				/* ignore */
 			}

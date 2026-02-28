@@ -40,11 +40,13 @@ Required frontmatter: `name`, `description`.
 
 Task board permissions are controlled per agent via `task_access`:
 
-- `none` - subagent cannot view parent task board snapshot
-- `read` - subagent receives parent task board snapshot (default)
-- `write` - subagent receives snapshot and is allowed to update tasks
+- `none` - subagent cannot view parent task board snapshot and `update_tasks` is blocked
+- `read` - subagent receives parent task board snapshot (default), but `update_tasks` is blocked
+- `write` - subagent receives snapshot and may call `update_tasks`
 
 `write` is opt-in and disabled by default.
+
+Enforcement is hard (subprocess guard extension), not just prompt instructions.
 
 ## Security
 
