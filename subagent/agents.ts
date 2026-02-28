@@ -8,11 +8,14 @@ import { getAgentDir, parseFrontmatter } from "@mariozechner/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
 
+export type TaskAccess = "none" | "read" | "write";
+
 export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
 	model?: string;
+	taskAccess: TaskAccess;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -60,11 +63,18 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			.map((t: string) => t.trim())
 			.filter(Boolean);
 
+		const rawTaskAccess = (frontmatter.task_access ?? "read").trim().toLowerCase();
+		const taskAccess: TaskAccess =
+			rawTaskAccess === "none" || rawTaskAccess === "read" || rawTaskAccess === "write"
+				? rawTaskAccess
+				: "read";
+
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model: frontmatter.model,
+			taskAccess,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -120,7 +130,7 @@ export function formatAgentList(agents: AgentConfig[], maxItems: number): { text
 	const listed = agents.slice(0, maxItems);
 	const remaining = agents.length - listed.length;
 	return {
-		text: listed.map((a) => `${a.name} (${a.source}): ${a.description}`).join("; "),
+		text: listed.map((a) => `${a.name} (${a.source}, tasks:${a.taskAccess}): ${a.description}`).join("; "),
 		remaining,
 	};
 }

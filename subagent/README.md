@@ -30,12 +30,21 @@ name: explorer
 description: Codebase exploration specialist
 tools: read, grep, find, ls, bash
 model: optional-model-id
+task_access: read # one of: none | read | write (default: read)
 ---
 
 System prompt body...
 ```
 
 Required frontmatter: `name`, `description`.
+
+Task board permissions are controlled per agent via `task_access`:
+
+- `none` - subagent cannot view parent task board snapshot
+- `read` - subagent receives parent task board snapshot (default)
+- `write` - subagent receives snapshot and is allowed to update tasks
+
+`write` is opt-in and disabled by default.
 
 ## Security
 

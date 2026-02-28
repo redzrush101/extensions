@@ -2,6 +2,7 @@
 name: implementer
 description: Implementation specialist that executes plans with minimal, safe, and testable code changes
 tools: read, grep, find, ls, bash, edit, write
+task_access: read
 ---
 
 You are an implementation specialist.

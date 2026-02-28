@@ -23,7 +23,7 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { type CustomEntry, type ExtensionAPI, type ExtensionContext, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
+import { type AgentConfig, type AgentScope, type TaskAccess, discoverAgents, formatAgentList } from "./agents.js";
 
 const SUBAGENT_CUSTOM_TYPE = "subagent_task";
 const SUBAGENT_SESSIONS_DIR = path.join(os.homedir(), ".pi", "subagent-sessions");
@@ -164,6 +164,75 @@ function formatToolCall(
 			return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
 		}
 	}
+}
+
+interface KanbanBoardSnapshot {
+	todo: string[];
+	inProgress: string[];
+	done: string[];
+}
+
+function parseKanbanBoardSnapshot(value: unknown): KanbanBoardSnapshot | null {
+	if (!value || typeof value !== "object") return null;
+	const raw = value as { todo?: unknown; inProgress?: unknown; done?: unknown };
+	if (!Array.isArray(raw.todo) || !Array.isArray(raw.inProgress) || !Array.isArray(raw.done)) return null;
+
+	const toStrings = (arr: unknown[]) => arr.map((v) => String(v).trim()).filter(Boolean);
+	return {
+		todo: toStrings(raw.todo),
+		inProgress: toStrings(raw.inProgress),
+		done: toStrings(raw.done),
+	};
+}
+
+function getParentTaskBoard(ctx: ExtensionContext): KanbanBoardSnapshot | null {
+	let board: KanbanBoardSnapshot | null = null;
+	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type !== "message") continue;
+		const msg = entry.message;
+		if (msg.role !== "toolResult" || msg.toolName !== "update_tasks") continue;
+		const details = msg.details as { board?: unknown } | undefined;
+		const parsed = parseKanbanBoardSnapshot(details?.board);
+		if (parsed) board = parsed;
+	}
+	return board;
+}
+
+function buildTaskAccessPrompt(taskAccess: TaskAccess, board: KanbanBoardSnapshot | null): string {
+	if (taskAccess === "none") {
+		return [
+			"## Parent Task Board Access",
+			"Access level: none",
+			"Do not request, read, or reference the parent task board.",
+			"Do not call `update_tasks`.",
+		].join("\n");
+	}
+
+	const boardLines = board
+		? [
+				`TODO (${board.todo.length}): ${board.todo.join("; ") || "-"}`,
+				`IN PROGRESS (${board.inProgress.length}): ${board.inProgress.join("; ") || "-"}`,
+				`DONE (${board.done.length}): ${board.done.join("; ") || "-"}`,
+			]
+		: ["No parent task board state found."];
+
+	if (taskAccess === "read") {
+		return [
+			"## Parent Task Board Access",
+			"Access level: read",
+			"You may read this board snapshot for coordination.",
+			"You must NOT call `update_tasks`; parent/orchestrator manages task updates.",
+			...boardLines,
+		].join("\n");
+	}
+
+	return [
+		"## Parent Task Board Access",
+		"Access level: write",
+		"You may read and update the task board when it improves coordination.",
+		"Prefer minimal updates and only touch tasks relevant to your delegated work.",
+		...boardLines,
+	].join("\n");
 }
 
 interface UsageStats {
@@ -340,6 +409,7 @@ interface RunSingleAgentOptions {
 	makeDetails: (results: SingleResult[]) => SubagentDetails;
 	pi?: ExtensionAPI;
 	resumeSessionId?: string;
+	parentTaskBoard?: KanbanBoardSnapshot | null;
 }
 
 function ensureSessionsDir(): string {
@@ -350,7 +420,7 @@ function ensureSessionsDir(): string {
 }
 
 async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleResult> {
-	const { defaultCwd, agents, agentName, task, cwd, step, signal, onUpdate, makeDetails, pi, resumeSessionId } = options;
+	const { defaultCwd, agents, agentName, task, cwd, step, signal, onUpdate, makeDetails, pi, resumeSessionId, parentTaskBoard } = options;
 
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -404,8 +474,10 @@ async function runSingleAgent(options: RunSingleAgentOptions): Promise<SingleRes
 	};
 
 	try {
-		if (agent.systemPrompt.trim()) {
-			const tmp = writePromptToTempFile(agent.name, agent.systemPrompt);
+		const taskAccessPrompt = buildTaskAccessPrompt(agent.taskAccess, parentTaskBoard ?? null);
+		const combinedPrompt = [agent.systemPrompt.trim(), taskAccessPrompt.trim()].filter(Boolean).join("\n\n");
+		if (combinedPrompt) {
+			const tmp = writePromptToTempFile(agent.name, combinedPrompt);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
 			args.push("--append-system-prompt", tmpPromptPath);
@@ -598,6 +670,7 @@ export default function (pi: ExtensionAPI) {
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
+			const parentTaskBoard = getParentTaskBoard(ctx);
 
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -842,11 +915,12 @@ export default function (pi: ExtensionAPI) {
 					cwd: step.cwd,
 					step: i + 1,
 					signal,
-						onUpdate: chainUpdate,
-						makeDetails: makeDetails("chain"),
-						pi,
-						resumeSessionId,
-					});
+					onUpdate: chainUpdate,
+					makeDetails: makeDetails("chain"),
+					pi,
+					resumeSessionId,
+					parentTaskBoard,
+				});
 					results.push(result);
 
 					const isError =
@@ -926,6 +1000,7 @@ export default function (pi: ExtensionAPI) {
 						makeDetails: makeDetails("parallel"),
 						pi,
 						resumeSessionId,
+						parentTaskBoard,
 					});
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -961,6 +1036,7 @@ export default function (pi: ExtensionAPI) {
 					makeDetails: makeDetails("single"),
 					pi,
 					resumeSessionId,
+					parentTaskBoard,
 				});
 				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
 				if (isError) {
