@@ -260,6 +260,14 @@ export default function kanbanOverlayExtension(pi: ExtensionAPI): void {
 		clearWorkingMessage(ctx);
 	});
 
+	pi.on("before_agent_start", (event) => ({
+		systemPrompt:
+			`${event.systemPrompt}\n\n## Kanban Task Tracking\n` +
+			"If work spans multiple steps, maintain a live board with the `update_tasks` tool. " +
+			"Keep tasks short and actionable. Move items across todo -> in_progress -> done as you progress. " +
+			"Use mode=append for incremental additions, mode=replace for full column updates, mode=clear when the task is fully complete.",
+	}));
+
 	pi.registerTool({
 		name: "update_tasks",
 		label: "Update Tasks",
